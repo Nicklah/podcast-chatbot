@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/Nicklah/podcast-chatbot/actions/workflows/ci.yml/badge.svg)](https://github.com/Nicklah/podcast-chatbot/actions/workflows/ci.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
-![Tests](https://img.shields.io/badge/tests-29-2ea44f)
+![Tests](https://img.shields.io/badge/tests-39-2ea44f)
 
 <!-- TODO after deploying: paste the Vercel URL here and add a screenshot to docs/. -->
 **▶ Live demo: _not deployed yet_** · no login required
@@ -96,14 +96,36 @@ The code is split so the part that matters can be tested without a network or a 
 |---|---|
 | `src/lib/chat.ts` | Pure. The whole conversation is re-sent each turn, old turns get dropped, transcripts are truncated on paragraph boundaries, bad conversations are rejected, one SSE chunk parses. **23 tests.** |
 | `src/lib/gemini.ts` | Against a fake `fetch`: streaming works, the key goes in a header and never the URL, a non-200 throws — and an SSE event split across two network chunks still arrives whole. **6 tests.** |
+| `src/lib/grounding.ts` | The grading rules for the grounding check below — an invented answer to an unanswerable question must score as a failure. **10 tests.** |
 
 ```bash
 npm test
 ```
 
-That last one is the test I'd have missed by hand: a network chunk isn't a line, so the
+The SSE one is the test I'd have missed by hand: a network chunk isn't a line, so the
 stream can split `data: {"candidates"...` straight down the middle. It looks fine in
 testing right up until it doesn't.
+
+### Checking that it doesn't make things up
+
+```bash
+npm run check:grounding     # calls the real API, needs your key, costs a little quota
+```
+
+Seven questions written by hand against the sample episode: four that the episode answers,
+and three it doesn't — including a phone number, and a leading question about franchise
+plans that were never mentioned. The first four have to produce the fact; the last three
+have to produce a refusal. It prints a score.
+
+This is not skipped in CI by accident, it's skipped on purpose — CI has no key, and a
+check that costs money shouldn't run on every push.
+
+**What this is not:** it's keyword matching, so it catches an invented phone number and
+would miss a subtly wrong summary. And it's a little flaky, because the model isn't
+deterministic. That flakiness is worth paying attention to rather than papering over — a
+check that passes 5 times out of 7 is telling you the prompt isn't reliable enough. The
+grown-up version of this compares against hand-written correct answers and is called an
+eval; it's the next thing I want to learn.
 
 ## Limitations
 
@@ -114,9 +136,10 @@ Real ones, not modesty:
   accounts.
 - **It forgets past six exchanges**, by design — see above.
 - **Grounding is a prompt, not a guarantee.** The system prompt tells the model to answer
-  only from the transcript and to refuse otherwise. It mostly obeys. It is not enforced in
-  code, and I have no automated measure of how often it slips — measuring that properly is
-  an eval, and it's what I want to add next.
+  only from the transcript and to refuse otherwise; nothing in the code enforces it.
+  `npm run check:grounding` measures how often it holds, but by keyword matching, which is
+  a smoke test rather than a real evaluation.
+  <!-- TODO: run it and put the score here. A check with no number next to it is decoration. -->
 - **No audio.** Transcript text in; transcription is a separate problem.
 
 ## Running locally
