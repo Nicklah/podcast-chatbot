@@ -5,9 +5,26 @@
 [![CI](https://github.com/Nicklah/podcast-chatbot/actions/workflows/ci.yml/badge.svg)](https://github.com/Nicklah/podcast-chatbot/actions/workflows/ci.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
 ![Tests](https://img.shields.io/badge/tests-39-2ea44f)
+![Grounding](https://img.shields.io/badge/grounding-7%2F7-2ea44f)
 
-<!-- TODO after deploying: paste the Vercel URL here and add a screenshot to docs/. -->
+<!-- TODO after deploying: paste the Vercel URL here. -->
 **▶ Live demo: _not deployed yet_** · no login required
+
+## Demo
+
+![Three questions about one episode: a quoted answer, a follow-up that resolves "it" from the previous turn, and a refusal](docs/demo.png)
+
+Three questions, and each one is doing a different job:
+
+1. **"How long does a starter take?"** → the answer comes back with the transcript quoted,
+   not paraphrased.
+2. **"And how often do you feed it during that time?"** → "it" is never named. It resolves,
+   because the previous exchange was re-sent. And the answer splits a question the episode
+   only half-covers — giving the fact it has, refusing the part it doesn't.
+3. **"What coffee do they serve?"** → not in the episode. It says so instead of inventing
+   something. That refusal is the feature; try to break it.
+
+Real output from the sample episode, not a mockup.
 
 ---
 
@@ -27,71 +44,104 @@ The knowledge is technically public and practically lost.
   you already asked.
 - **Streams the answer** as it's generated, instead of showing a blank screen for eight
   seconds.
-- **Admits when it doesn't know.** Ask the sample episode about coffee — it isn't in the
-  transcript, and the bot says so rather than inventing an answer. That refusal is the
-  feature; try to break it.
+- **Admits when it doesn't know**, rather than filling the gap from general knowledge.
 
 ## How it works
 
+```mermaid
+flowchart LR
+    subgraph browser["Browser"]
+        UI["Chat.tsx<br/>holds the conversation"]
+    end
+
+    subgraph server["Next.js server"]
+        Route["/api/chat<br/>holds the API key"]
+        Core["chat.ts — pure<br/>builds the request body"]
+        Shell["gemini.ts<br/>the only fetch"]
+    end
+
+    Gemini["Gemini API"]
+
+    UI -->|"POST every message so far"| Route
+    Route --> Core
+    Core -->|"request body"| Shell
+    Shell -->|"HTTPS, key in a header"| Gemini
+    Gemini -.->|"SSE chunks"| Shell
+    Shell -.-> Route
+    Route -.->|"streamed plain text"| UI
 ```
-Browser  ──POST /api/chat──▶  Next.js route  ──▶  src/lib/chat.ts   (pure: builds the request)
-(holds the                    (holds the key)      src/lib/gemini.ts (the only fetch)
- conversation)                                              │
-      ◀─────── streamed text ──────────────────────────────┘
-```
+
+The split is the main design decision. Everything that can be decided **without** a network
+connection is decided in `chat.ts`, which is pure — no `fetch`, no key, no environment, no
+clock. That's why the logic that matters has 23 tests and the file that touches the network
+is 90 lines.
 
 Two things I made sure I could explain out loud, because that was the actual goal of this
 project:
 
-**1. The model has no memory. My code is the memory.**
+### 1. The model has no memory. My code is the memory.
 
-Gemini remembers nothing between requests. On the second message I don't send "and after
-that?" — I send the transcript, *and* the first question, *and* the first answer, *and*
-the new question, all over again. On the tenth message I send all ten. The entire
-conversation is re-packed into every single call by
-[`buildRequest`](src/lib/chat.ts), which is why that function has a test asserting exactly
-that. Chat "memory" is a re-send, not a state the model keeps.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant You
+    participant App as My code
+    participant Gemini
+
+    You->>App: How long does a starter take?
+    App->>Gemini: transcript + Q1
+    Gemini-->>App: "About two weeks."
+    Note over Gemini: remembers nothing
+
+    You->>App: And how often do you feed it?
+    App->>Gemini: transcript + Q1 + A1 + Q2
+    Gemini-->>App: resolves "it" from Q1
+    Note over Gemini: remembers nothing
+```
+
+Gemini is stateless. On the second message I don't send "and how often do you feed it?" — I
+send the transcript, *and* the first question, *and* the first answer, *and* the new
+question, all over again. On the tenth message I send all ten. The entire conversation is
+re-packed into every single call by [`buildRequest`](src/lib/chat.ts), which is why that
+function has a test asserting exactly that.
+
+Chat "memory" is a re-send, not a state the model keeps.
 
 That has a cost: the request grows every turn, so `trimHistory` caps it at the last six
-exchanges. Past that, the bot genuinely forgets the start of the conversation — because I
+exchanges. Past that the bot genuinely forgets the start of the conversation — because I
 stopped sending it.
 
-You can watch it working. Ask about the starter, then ask a follow-up that never names it:
+### 2. What happens when the transcript is longer than the context window
 
-> **You:** How long does a starter take?
-> **Episode:** Mira Osei states that "A starter takes about two weeks before it's reliable".
->
-> **You:** And how often do you feed it during that time?
-> **Episode:** They don't discuss that in this episode. Mira states that you feed it
-> "Twice a day once it's going," but does not specify the feeding schedule during the
-> initial two-week period.
-
-Two things happened there. "It" resolved to the starter, because the first exchange was
-re-sent. And the answer splits a question the transcript half-covers — giving the fact it
-has and refusing the part it doesn't — rather than smoothing over the gap.
-
-**2. What happens when the transcript is longer than the context window.**
+```mermaid
+flowchart TD
+    A["Transcript"] --> B{"Fits the<br/>token budget?"}
+    B -->|"yes"| C["Send it whole"]
+    B -->|"no"| D["Split on blank lines"]
+    D --> E["Keep whole paragraphs,<br/>starting from the top"]
+    E --> F["Stop when the<br/>budget runs out"]
+    F --> G["Tell the model it only<br/>has the earlier part"]
+    G --> H["The bot can say so,<br/>not answer from half"]
+```
 
 Every model has a limit on how much text it will accept. `gemini-2.5-flash` takes about a
-million tokens, so one episode fits many times over — but I still budget it in
-[`fitTranscript`](src/lib/chat.ts), for two reasons that aren't hypothetical: the whole
-transcript is re-sent on *every* message and input tokens are billed per request, and most
-other models are far smaller.
+million tokens, so one episode fits many times over — but [`fitTranscript`](src/lib/chat.ts)
+budgets it anyway, for two reasons that aren't hypothetical: the whole transcript is re-sent
+on *every* message and input tokens are billed per request, and most other models are far
+smaller.
 
-When a transcript doesn't fit, it's split on blank lines and whole paragraphs are kept from
-the start until the budget runs out — never cut mid-sentence, and never silently. The
-system prompt gets an extra line telling the model it only has the earlier part of the
-episode, so the bot can say so instead of confidently answering from half the facts.
+Nothing is ever cut mid-sentence, and nothing is ever cut silently.
 
 Keeping the *start* is an arguable choice: podcast intros establish who the guest is, and
 losing that makes every later answer worse. The right fix isn't truncation at all — it's
 retrieving only the relevant chunks, which is RAG, and which is a much later project.
 
-**And one decision that isn't about the model at all:** the `/api/chat` route exists so the
-API key stays on the server. If the browser called Gemini directly, the key would ship in
-the JavaScript bundle and anyone could open devtools and spend the quota. The variable is
-`GEMINI_API_KEY`, deliberately *without* a `NEXT_PUBLIC_` prefix — that prefix is what
-would leak it.
+### And one decision that isn't about the model at all
+
+The `/api/chat` route exists so the API key stays on the server. If the browser called
+Gemini directly, the key would ship in the JavaScript bundle and anyone could open devtools
+and spend the quota. The variable is `GEMINI_API_KEY`, deliberately *without* a
+`NEXT_PUBLIC_` prefix — that prefix is what would leak it.
 
 ## Tech stack
 
@@ -129,12 +179,12 @@ npm run check:grounding     # calls the real API, needs your key, costs a little
 Seven questions written by hand against the sample episode: four that the episode answers,
 and three it doesn't — including a phone number, and a leading question about franchise
 plans that were never mentioned. The first four have to produce the fact; the last three
-have to produce a refusal. It prints a score.
+have to produce a refusal.
 
 **Currently 7/7, stable across three runs** (`gemini-2.5-flash`, 1 Sep 2026).
 
-This is not skipped in CI by accident, it's skipped on purpose — CI has no key, and a
-check that costs money shouldn't run on every push.
+This is skipped in CI on purpose, not by accident — CI has no key, and a check that costs
+money shouldn't run on every push.
 
 **What this is not:** it's keyword matching, so it catches an invented phone number and
 would miss a subtly wrong summary. And it's a little flaky, because the model isn't
@@ -171,11 +221,29 @@ npm run dev
 You need a Gemini API key — free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
 The free tier is plenty for this.
 
+## Project layout
+
+```
+src/
+  app/
+    page.tsx            server component — reads the transcript, renders the header
+    api/chat/route.ts   holds the key, validates input, streams the answer back
+  components/
+    Chat.tsx            client component — holds the conversation
+  lib/
+    chat.ts             PURE — the request body, history trimming, transcript fitting
+    gemini.ts           the only file that calls fetch
+    grounding.ts        the grounding check's questions and grading
+  data/
+    episode.ts          one episode: metadata + transcript
+```
+
 ## Use your own podcast
 
 Replace `src/data/episode.ts` with a transcript of a show you actually listen to and update
-the `episode` details. Keep the blank line between paragraphs — that's what stops a
-long transcript from being cut off mid-sentence.
+the `episode` details. Keep the blank line between paragraphs — that's what stops a long
+transcript from being cut off mid-sentence. The questions in `src/lib/grounding.ts` and the
+suggestion chips in `Chat.tsx` are written against the sample episode, so rewrite those too.
 
 The sample episode in the repo is fictional. Nobody said any of it.
 
