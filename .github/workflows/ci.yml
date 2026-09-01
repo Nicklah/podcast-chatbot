@@ -1,0 +1,31 @@
+# Runs on every push and pull request. Three real gates:
+#   typecheck -> the types actually hold
+#   test      -> the request-building logic still does what it says
+#   build     -> it would deploy
+# No API key needed: every test uses a fake fetch, which is the point of
+# keeping the network in one small file.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Typecheck · Test · Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
