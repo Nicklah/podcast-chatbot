@@ -8,8 +8,13 @@ const request: GeminiRequest = {
   generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
 };
 
-/** A fake Gemini that hands back exactly these network chunks, in order. */
-function fakeGemini(chunks: string[], init: ResponseInit = {}) {
+/**
+ * A fake Gemini that hands back exactly these network chunks, in order.
+ *
+ * Typed with the two arguments fetch is actually called with, so the tests
+ * below can read `mock.calls[0]` without casting it back into shape.
+ */
+function fakeGemini(chunks: string[]) {
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       const encoder = new TextEncoder();
@@ -17,7 +22,7 @@ function fakeGemini(chunks: string[], init: ResponseInit = {}) {
       controller.close();
     },
   });
-  return vi.fn(async () => new Response(body, { status: 200, ...init }));
+  return vi.fn(async (_url: string, _options: RequestInit) => new Response(body, { status: 200 }));
 }
 
 async function collect(generator: AsyncGenerator<string>) {
@@ -65,7 +70,7 @@ describe("streamGemini", () => {
 
     await collect(streamGemini(request, { apiKey: "secret-key" }));
 
-    const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, options] = fetchMock.mock.calls[0];
     expect(url).not.toContain("secret-key");
     expect((options.headers as Record<string, string>)["x-goog-api-key"]).toBe("secret-key");
     expect(url).toContain("alt=sse"); // streaming, not one big response at the end
