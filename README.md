@@ -56,6 +56,20 @@ That has a cost: the request grows every turn, so `trimHistory` caps it at the l
 exchanges. Past that, the bot genuinely forgets the start of the conversation — because I
 stopped sending it.
 
+You can watch it working. Ask about the starter, then ask a follow-up that never names it:
+
+> **You:** How long does a starter take?
+> **Episode:** Mira Osei states that "A starter takes about two weeks before it's reliable".
+>
+> **You:** And how often do you feed it during that time?
+> **Episode:** They don't discuss that in this episode. Mira states that you feed it
+> "Twice a day once it's going," but does not specify the feeding schedule during the
+> initial two-week period.
+
+Two things happened there. "It" resolved to the starter, because the first exchange was
+re-sent. And the answer splits a question the transcript half-covers — giving the fact it
+has and refusing the part it doesn't — rather than smoothing over the gap.
+
 **2. What happens when the transcript is longer than the context window.**
 
 Every model has a limit on how much text it will accept. `gemini-2.5-flash` takes about a
@@ -117,6 +131,8 @@ and three it doesn't — including a phone number, and a leading question about 
 plans that were never mentioned. The first four have to produce the fact; the last three
 have to produce a refusal. It prints a score.
 
+**Currently 7/7, stable across three runs** (`gemini-2.5-flash`, 1 Sep 2026).
+
 This is not skipped in CI by accident, it's skipped on purpose — CI has no key, and a
 check that costs money shouldn't run on every push.
 
@@ -137,9 +153,9 @@ Real ones, not modesty:
 - **It forgets past six exchanges**, by design — see above.
 - **Grounding is a prompt, not a guarantee.** The system prompt tells the model to answer
   only from the transcript and to refuse otherwise; nothing in the code enforces it.
-  `npm run check:grounding` measures how often it holds, but by keyword matching, which is
-  a smoke test rather than a real evaluation.
-  <!-- TODO: run it and put the score here. A check with no number next to it is decoration. -->
+  `npm run check:grounding` measures how often it holds — currently 7/7 — but by keyword
+  matching, which is a smoke test rather than a real evaluation. Seven questions is also a
+  very small sample to claim anything from.
 - **No audio.** Transcript text in; transcription is a separate problem.
 
 ## Running locally
