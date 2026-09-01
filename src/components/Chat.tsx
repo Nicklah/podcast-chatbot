@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Message } from "@/lib/chat";
 
+// Tied to the sample episode — update these when you swap in your own transcript.
+// The last one is deliberately NOT in the episode, so the refusal is easy to try.
 const SUGGESTIONS = [
   "How long does a starter take?",
   "Why did they nearly close?",
